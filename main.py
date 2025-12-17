@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 # -------------------------
 # Data model
@@ -418,7 +419,16 @@ st.dataframe(summary_plus, width="stretch",hide_index=True)
 
 # Detailed table
 st.subheader("Detailed Monthly Schedule")
-st.dataframe(df_all, use_container_width=True, height=420)
+gb = GridOptionsBuilder.from_dataframe(df_all)
+gb.configure_default_column(filter=True, sortable=True, resizable=True)
+grid_options = gb.build()
+AgGrid(
+    df_all,
+    gridOptions=grid_options,
+    height=420,
+    fit_columns_on_grid_load=True,
+    theme="streamlit",
+)
 
 # Download table
 csv_bytes, fname = to_csv_download(df_all)
