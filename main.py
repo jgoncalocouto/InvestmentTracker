@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
 
 # -------------------------
 # Data model
@@ -419,16 +418,59 @@ st.dataframe(summary_plus, width="stretch",hide_index=True)
 
 # Detailed table
 st.subheader("Detailed Monthly Schedule")
-gb = GridOptionsBuilder.from_dataframe(df_all)
-gb.configure_default_column(filter=True, sortable=True, resizable=True)
-grid_options = gb.build()
-AgGrid(
-    df_all,
-    gridOptions=grid_options,
-    height=420,
-    fit_columns_on_grid_load=True,
-    theme="streamlit",
-)
+
+with st.expander("Filter schedule by column", expanded=False):
+    st.caption("Adjust each column's filter to refine the monthly schedule table.")
+    df_all["date"] = pd.to_datetime(df_all["date"])
+
+    filters = {}
+    for col in df_all.columns:
+        series = df_all[col]
+        if pd.api.types.is_numeric_dtype(series):
+            min_val, max_val = float(series.min()), float(series.max())
+            lower, upper = st.slider(
+                f"{col}",
+                min_value=min_val,
+                max_value=max_val,
+                value=(min_val, max_val),
+                step=max((max_val - min_val) / 500, 0.01),
+            )
+            filters[col] = ("range", lower, upper)
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            min_date, max_date = series.min().date(), series.max().date()
+            start_date, end_date = st.date_input(
+                f"{col}",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+            filters[col] = ("date", start_date or min_date, end_date or max_date)
+        else:
+            options = sorted(series.dropna().unique().tolist())
+            selection = st.multiselect(f"{col}", options=options, default=options)
+            filters[col] = ("categorical", selection)
+
+df_filtered = df_all.copy()
+for col, spec in filters.items():
+    kind = spec[0]
+    if kind == "range":
+        _, lower, upper = spec
+        df_filtered = df_filtered[df_filtered[col].between(lower, upper)]
+    elif kind == "date":
+        _, start_date, end_date = spec
+        df_filtered = df_filtered[
+            (df_filtered[col].dt.date >= start_date) & (df_filtered[col].dt.date <= end_date)
+        ]
+    elif kind == "categorical":
+        _, selection = spec
+        if selection:
+            df_filtered = df_filtered[df_filtered[col].isin(selection)]
+
+sort_col = st.selectbox("Sort by", options=df_all.columns, index=list(df_all.columns).index("date"))
+sort_dir = st.radio("Order", options=["Ascending", "Descending"], horizontal=True)
+df_filtered = df_filtered.sort_values(sort_col, ascending=(sort_dir == "Ascending"))
+
+st.dataframe(df_filtered, use_container_width=True, height=420)
 
 # Download table
 csv_bytes, fname = to_csv_download(df_all)
