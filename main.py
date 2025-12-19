@@ -493,52 +493,54 @@ st.dataframe(df_filtered, use_container_width=True, height=420)
 csv_bytes, fname = to_csv_download(df_all)
 st.download_button("Download CSV", data=csv_bytes, file_name=fname, mime="text/csv")
 
-# Chart: per investment + TOTAL as line chart (TOTAL carries forward)
+# Chart: per investment + TOTAL as bars (TOTAL carries forward)
 st.subheader("Balances Over Time")
 
-df_all["date"] = pd.to_datetime(df_all["date"])
-cal_start = df_all["date"].min()
-cal_end   = df_all["date"].max()
-calendar = pd.date_range(cal_start, cal_end, freq="MS")
+df_plot = df_filtered.copy()
+if df_plot.empty:
+    st.warning("No data to chart after filters.")
+else:
+    df_plot["date"] = pd.to_datetime(df_plot["date"])
+    cal_start = df_plot["date"].min()
+    cal_end   = df_plot["date"].max()
+    calendar = pd.date_range(cal_start, cal_end, freq="MS")
 
-# TOTAL with carry-forward after investments end
-totals = []
-for inv, g in df_all.groupby("investment"):
-    # collapse to one row per date to avoid duplicate index during reindex
-    series = g.groupby("date")["closing_balance"].last()
-    s = (
-        series.reindex(calendar)
-              .ffill()
-              .fillna(0.0)
+    # TOTAL with carry-forward after investments end
+    totals = []
+    for inv, g in df_plot.groupby("investment"):
+        # collapse to one row per date to avoid duplicate index during reindex
+        series = g.groupby("date")["closing_balance"].last()
+        s = (
+            series.reindex(calendar)
+                  .ffill()
+                  .fillna(0.0)
+        )
+        totals.append(s)
+
+    total_series = pd.concat(totals, axis=1).sum(axis=1) if totals else pd.Series([], dtype=float)
+    total_df = total_series.reset_index()
+    total_df.columns = ["date", "closing_balance"]
+    total_df["investment"] = "TOTAL"
+
+    plot_df = pd.concat(
+        [
+            df_plot[["date", "investment", "closing_balance"]],
+            total_df[["date", "investment", "closing_balance"]],
+        ],
+        ignore_index=True,
     )
-    totals.append(s)
 
-total_series = pd.concat(totals, axis=1).sum(axis=1)
-total_df = total_series.reset_index()
-total_df.columns = ["date", "closing_balance"]
-total_df["investment"] = "TOTAL"
-
-plot_df = pd.concat(
-    [
-        df_all[["date", "investment", "closing_balance"]],
-        total_df[["date", "investment", "closing_balance"]],
-    ],
-    ignore_index=True,
-)
-
-fig = px.line(
-    plot_df,
-    x="date",
-    y="closing_balance",
-    color="investment",
-    labels={"date": "Date", "closing_balance": "Closing Balance", "investment": "Investment"},
-    title="Monthly Closing Balance per Investment (TOTAL carries finished balances forward)",
-)
-# make TOTAL more visible
-fig.for_each_trace(lambda t: t.update(line=dict(width=4, dash="solid")) if t.name == "TOTAL" else ())
-fig.update_traces(mode="lines")
-fig.update_layout(legend_title=None)
-st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        plot_df,
+        x="date",
+        y="closing_balance",
+        color="investment",
+        barmode="group",
+        labels={"date": "Date", "closing_balance": "Closing Balance", "investment": "Investment"},
+        title="Monthly Closing Balance per Investment (TOTAL carries finished balances forward)",
+    )
+    fig.update_layout(legend_title=None)
+    st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------
 # Retirement & Drawdown
