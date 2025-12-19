@@ -220,6 +220,20 @@ with st.sidebar:
             if any(k.startswith(p) for p in prefixes):
                 st.session_state.pop(k, None)
 
+    def _seed_investment_inputs(configs: List[InvestmentConfig]):
+        st.session_state.defaults = [c.__dict__.copy() for c in configs]
+        st.session_state["n_investments"] = len(configs)
+        for i, cfg in enumerate(configs):
+            inst_end = cfg.installments_end_date or cfg.end_date
+            st.session_state[f"name_{i}"] = cfg.name
+            st.session_state[f"start_{i}"] = cfg.start_date
+            st.session_state[f"end_{i}"] = cfg.end_date
+            st.session_state[f"start_amt_{i}"] = float(cfg.starting_amount)
+            st.session_state[f"inst_{i}"] = float(cfg.monthly_installment)
+            st.session_state[f"inst_end_{i}"] = inst_end
+            st.session_state[f"earlystop_{i}"] = inst_end < cfg.end_date
+            st.session_state[f"rate_{i}"] = float(cfg.annual_rate_pct)
+
     uploaded = st.file_uploader("Load scenario (.json)", type="json", key="uploader")
     if uploaded and not st.session_state.get("scenario_loaded", False):
         text = uploaded.read().decode("utf-8")
@@ -227,8 +241,7 @@ with st.sidebar:
 
         # seed state BEFORE any widget instantiation
         _clear_investment_inputs()
-        st.session_state.defaults = [c.__dict__ for c in configs_loaded]
-        st.session_state["n_investments"] = len(configs_loaded)
+        _seed_investment_inputs(configs_loaded)
         st.session_state["scenario_loaded"] = True
 
         st.success(f"Loaded {len(configs_loaded)} investments from scenario")
@@ -380,13 +393,8 @@ st.markdown("---")
 if "calculated" not in st.session_state:
     st.session_state.calculated = False
 
-col_calc1, col_calc2 = st.columns([1,1])
-with col_calc1:
-    if st.button("🚀 Calculate / Recalculate"):
-        st.session_state.calculated = True
-with col_calc2:
-    if st.button("🧹 Reset results"):
-        st.session_state.calculated = False
+if st.button("🚀 Calculate / Recalculate"):
+    st.session_state.calculated = True
 
 if not st.session_state.calculated:
     st.info("Set inputs and click **Calculate / Recalculate**. Retirement & Drawdown inputs can be changed freely after calculation.")
@@ -672,4 +680,3 @@ with d1:
     st.metric("PV of Final Value (sum) — today's €", f"{pv_final_value_today:,.2f}")
 with d2:
     st.metric("Monthly draw — today's € (at draw start)", f"{real_monthly_draw_today:,.2f}")
-
