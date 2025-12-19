@@ -212,14 +212,36 @@ st.caption("Multi investment tracker through compounding and monthly installment
 with st.sidebar:
     st.header("Scenario")
 
+    def _clear_investment_inputs():
+        prefixes = (
+            "name_", "start_", "end_", "start_amt_", "inst_", "inst_end_", "earlystop_", "rate_"
+        )
+        for k in list(st.session_state.keys()):
+            if any(k.startswith(p) for p in prefixes):
+                st.session_state.pop(k, None)
+
+    def _seed_investment_inputs(configs: List[InvestmentConfig]):
+        st.session_state.defaults = [c.__dict__.copy() for c in configs]
+        st.session_state["n_investments"] = len(configs)
+        for i, cfg in enumerate(configs):
+            inst_end = cfg.installments_end_date or cfg.end_date
+            st.session_state[f"name_{i}"] = cfg.name
+            st.session_state[f"start_{i}"] = cfg.start_date
+            st.session_state[f"end_{i}"] = cfg.end_date
+            st.session_state[f"start_amt_{i}"] = float(cfg.starting_amount)
+            st.session_state[f"inst_{i}"] = float(cfg.monthly_installment)
+            st.session_state[f"inst_end_{i}"] = inst_end
+            st.session_state[f"earlystop_{i}"] = inst_end < cfg.end_date
+            st.session_state[f"rate_{i}"] = float(cfg.annual_rate_pct)
+
     uploaded = st.file_uploader("Load scenario (.json)", type="json", key="uploader")
     if uploaded and not st.session_state.get("scenario_loaded", False):
         text = uploaded.read().decode("utf-8")
         configs_loaded = import_scenario(text)
 
         # seed state BEFORE any widget instantiation
-        st.session_state.defaults = [c.__dict__ for c in configs_loaded]
-        st.session_state["n_investments"] = len(configs_loaded)
+        _clear_investment_inputs()
+        _seed_investment_inputs(configs_loaded)
         st.session_state["scenario_loaded"] = True
 
         st.success(f"Loaded {len(configs_loaded)} investments from scenario")
@@ -371,13 +393,8 @@ st.markdown("---")
 if "calculated" not in st.session_state:
     st.session_state.calculated = False
 
-col_calc1, col_calc2 = st.columns([1,1])
-with col_calc1:
-    if st.button("🚀 Calculate / Recalculate"):
-        st.session_state.calculated = True
-with col_calc2:
-    if st.button("🧹 Reset results"):
-        st.session_state.calculated = False
+if st.button("🚀 Calculate / Recalculate"):
+    st.session_state.calculated = True
 
 if not st.session_state.calculated:
     st.info("Set inputs and click **Calculate / Recalculate**. Retirement & Drawdown inputs can be changed freely after calculation.")
@@ -418,58 +435,112 @@ st.dataframe(summary_plus, width="stretch",hide_index=True)
 
 # Detailed table
 st.subheader("Detailed Monthly Schedule")
-st.dataframe(df_all, use_container_width=True, height=420)
+
+with st.expander("Filter schedule by column", expanded=False):
+    st.caption("Adjust each column's filter to refine the monthly schedule table.")
+    df_all["date"] = pd.to_datetime(df_all["date"])
+
+    filters = {}
+    for col in df_all.columns:
+        series = df_all[col]
+        if pd.api.types.is_numeric_dtype(series):
+            min_val, max_val = float(series.min()), float(series.max())
+            lower, upper = st.slider(
+                f"{col}",
+                min_value=min_val,
+                max_value=max_val,
+                value=(min_val, max_val),
+                step=max((max_val - min_val) / 500, 0.01),
+            )
+            filters[col] = ("range", lower, upper)
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            min_date, max_date = series.min().date(), series.max().date()
+            start_date, end_date = st.date_input(
+                f"{col}",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+            filters[col] = ("date", start_date or min_date, end_date or max_date)
+        else:
+            options = sorted(series.dropna().unique().tolist())
+            selection = st.multiselect(f"{col}", options=options, default=options)
+            filters[col] = ("categorical", selection)
+
+df_filtered = df_all.copy()
+for col, spec in filters.items():
+    kind = spec[0]
+    if kind == "range":
+        _, lower, upper = spec
+        df_filtered = df_filtered[df_filtered[col].between(lower, upper)]
+    elif kind == "date":
+        _, start_date, end_date = spec
+        df_filtered = df_filtered[
+            (df_filtered[col].dt.date >= start_date) & (df_filtered[col].dt.date <= end_date)
+        ]
+    elif kind == "categorical":
+        _, selection = spec
+        if selection:
+            df_filtered = df_filtered[df_filtered[col].isin(selection)]
+
+sort_col = st.selectbox("Sort by", options=df_all.columns, index=list(df_all.columns).index("date"))
+sort_dir = st.radio("Order", options=["Ascending", "Descending"], horizontal=True)
+df_filtered = df_filtered.sort_values(sort_col, ascending=(sort_dir == "Ascending"))
+
+st.dataframe(df_filtered, use_container_width=True, height=420)
 
 # Download table
-csv_bytes, fname = to_csv_download(df_all)
+csv_bytes, fname = to_csv_download(df_filtered)
 st.download_button("Download CSV", data=csv_bytes, file_name=fname, mime="text/csv")
 
-# Chart: per investment + TOTAL as line chart (TOTAL carries forward)
+# Chart: per investment + TOTAL as bars (TOTAL carries forward)
 st.subheader("Balances Over Time")
 
-df_all["date"] = pd.to_datetime(df_all["date"])
-cal_start = df_all["date"].min()
-cal_end   = df_all["date"].max()
-calendar = pd.date_range(cal_start, cal_end, freq="MS")
+df_plot = df_filtered.copy()
+if df_plot.empty:
+    st.warning("No data to chart after filters.")
+else:
+    df_plot["date"] = pd.to_datetime(df_plot["date"])
+    cal_start = df_plot["date"].min()
+    cal_end   = df_plot["date"].max()
+    calendar = pd.date_range(cal_start, cal_end, freq="MS")
 
-# TOTAL with carry-forward after investments end
-totals = []
-for inv, g in df_all.groupby("investment"):
-    # collapse to one row per date to avoid duplicate index during reindex
-    series = g.groupby("date")["closing_balance"].last()
-    s = (
-        series.reindex(calendar)
-              .ffill()
-              .fillna(0.0)
+    # TOTAL with carry-forward after investments end
+    totals = []
+    for inv, g in df_plot.groupby("investment"):
+        # collapse to one row per date to avoid duplicate index during reindex
+        series = g.groupby("date")["closing_balance"].last()
+        s = (
+            series.reindex(calendar)
+                  .ffill()
+                  .fillna(0.0)
+        )
+        totals.append(s)
+
+    total_series = pd.concat(totals, axis=1).sum(axis=1) if totals else pd.Series([], dtype=float)
+    total_df = total_series.reset_index()
+    total_df.columns = ["date", "closing_balance"]
+    total_df["investment"] = "TOTAL"
+
+    plot_df = pd.concat(
+        [
+            df_plot[["date", "investment", "closing_balance"]],
+            total_df[["date", "investment", "closing_balance"]],
+        ],
+        ignore_index=True,
     )
-    totals.append(s)
 
-total_series = pd.concat(totals, axis=1).sum(axis=1)
-total_df = total_series.reset_index()
-total_df.columns = ["date", "closing_balance"]
-total_df["investment"] = "TOTAL"
-
-plot_df = pd.concat(
-    [
-        df_all[["date", "investment", "closing_balance"]],
-        total_df[["date", "investment", "closing_balance"]],
-    ],
-    ignore_index=True,
-)
-
-fig = px.line(
-    plot_df,
-    x="date",
-    y="closing_balance",
-    color="investment",
-    labels={"date": "Date", "closing_balance": "Closing Balance", "investment": "Investment"},
-    title="Monthly Closing Balance per Investment (TOTAL carries finished balances forward)",
-)
-# make TOTAL more visible
-fig.for_each_trace(lambda t: t.update(line=dict(width=4, dash="solid")) if t.name == "TOTAL" else ())
-fig.update_traces(mode="lines")
-fig.update_layout(legend_title=None)
-st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        plot_df,
+        x="date",
+        y="closing_balance",
+        color="investment",
+        barmode="group",
+        labels={"date": "Date", "closing_balance": "Closing Balance", "investment": "Investment"},
+        title="Monthly Closing Balance per Investment (TOTAL carries finished balances forward)",
+    )
+    fig.update_layout(legend_title=None)
+    st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------
 # Retirement & Drawdown
@@ -611,4 +682,3 @@ with d1:
     st.metric("PV of Final Value (sum) — today's €", f"{pv_final_value_today:,.2f}")
 with d2:
     st.metric("Monthly draw — today's € (at draw start)", f"{real_monthly_draw_today:,.2f}")
-
