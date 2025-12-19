@@ -212,12 +212,21 @@ st.caption("Multi investment tracker through compounding and monthly installment
 with st.sidebar:
     st.header("Scenario")
 
+    def _clear_investment_inputs():
+        prefixes = (
+            "name_", "start_", "end_", "start_amt_", "inst_", "inst_end_", "earlystop_", "rate_"
+        )
+        for k in list(st.session_state.keys()):
+            if any(k.startswith(p) for p in prefixes):
+                st.session_state.pop(k, None)
+
     uploaded = st.file_uploader("Load scenario (.json)", type="json", key="uploader")
     if uploaded and not st.session_state.get("scenario_loaded", False):
         text = uploaded.read().decode("utf-8")
         configs_loaded = import_scenario(text)
 
         # seed state BEFORE any widget instantiation
+        _clear_investment_inputs()
         st.session_state.defaults = [c.__dict__ for c in configs_loaded]
         st.session_state["n_investments"] = len(configs_loaded)
         st.session_state["scenario_loaded"] = True
