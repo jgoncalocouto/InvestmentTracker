@@ -490,7 +490,7 @@ df_filtered = df_filtered.sort_values(sort_col, ascending=(sort_dir == "Ascendin
 st.dataframe(df_filtered, use_container_width=True, height=420)
 
 # Download table
-csv_bytes, fname = to_csv_download(df_all)
+csv_bytes, fname = to_csv_download(df_filtered)
 st.download_button("Download CSV", data=csv_bytes, file_name=fname, mime="text/csv")
 
 # Chart: per investment + TOTAL as bars (TOTAL carries forward)
